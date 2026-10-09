@@ -95,7 +95,8 @@ jobs:
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
 
-  # Stage 4: Deploy the published image to Amazon EKS
+  
+  # Stage 4: Deploy to Amazon EKS
   deploy-to-kubernetes:
     name: "4. Deploy to Kubernetes"
     if: >-
@@ -114,29 +115,35 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials with OIDC
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ vars.EKS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Configure kubectl for EKS
+      - name: Configure kubectl
         run: |
           aws eks update-kubeconfig \
             --name "${{ vars.EKS_CLUSTER_NAME }}" \
             --region "${{ vars.AWS_REGION }}"
 
-      - name: Update deployment image
+      - name: Set ECR image URI
         run: |
-          kubectl set image \
-            deployment/${{ vars.K8S_DEPLOYMENT_NAME }} \
-            ${{ vars.K8S_CONTAINER_NAME }}=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+          echo "ECR_IMAGE_URI=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}" >> "$GITHUB_ENV"
 
-      - name: Apply Kubernetes manifests
-        run: kubectl apply -f k8s/
+      - name: Deploy to Kubernetes
+        run: |
+          envsubst '${ECR_IMAGE_URI}' \
+            < k8s/deployment.yaml \
+            | kubectl apply -f -
 
-      - name: Verify rollout
+          kubectl apply -f k8s/service.yaml
+
+      - name: Verify deployment
         run: |
           kubectl rollout status \
-            deployment/${{ vars.K8S_DEPLOYMENT_NAME }} \
+            deployment/devops-assessment \
             --timeout=180s
+
+          kubectl get pods
+          kubectl get services
